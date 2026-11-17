@@ -1,211 +1,210 @@
+<div align="center">
+
 # 🪐 TESS Transit Detection Pipeline
 
-> CPU-only pipeline for detecting exoplanet transit candidates from NASA TESS time-series photometry. Downloads light curves via MAST, adds Gaia DR3 stellar context, and classifies candidates with a supervised Random Forest plus XGBoost fit fallback. No GPU required.
+### Find transit-like signals in NASA TESS light curves
+
+**Physics-led detection · Gaia stellar context · ML-assisted candidate classification**
+
+![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white)
+![Data](https://img.shields.io/badge/Data-NASA%20TESS-7B2CBF)
+![Runtime](https://img.shields.io/badge/Runtime-CPU-lightgrey)
+
+</div>
+
 ---
 
-## Physics checks and limits
+## 📋 Table of Contents
 
-TESS light curves support some useful transit-shape checks, but they do not provide every measurement needed to reject false positives. In the patched pipeline, unsupported or placeholder values are omitted from the model and physics score.
+- [🚀 How It Works](#-how-it-works)
+- [🏗️ Pipeline Stages](#️-pipeline-stages)
+- [⚛️ Physics Checks](#️-physics-checks)
+- [📈 Validation Snapshot](#-validation-snapshot)
+- [⚡ Quick Start](#-quick-start)
+- [📁 Project Structure](#-project-structure)
+- [⚙️ Configuration](#️-configuration)
+- [📊 Output Files](#-output-files)
+- [🧰 Requirements](#-requirements)
 
-| Check | What the available TESS data can support |
-|---|---|
-| Depth vs. Gaia radius | A rough companion-radius consistency check when stellar parameters are available; it is not a planet confirmation. |
-| Ingress/egress shape | A light-curve shape score that can flag V-shaped or grazing events. |
-| Secondary eclipse | A search near the expected phase when enough orbital cycles and data are available; otherwise neutral/unavailable. |
-| Odd/even depths | A comparison of alternating transit depths when enough events are observed. |
-| Ellipsoidal variation | A light-curve modulation check when the signal and coverage support it. |
-| Centroid motion | Not currently measured by the patched classifier; placeholder values are excluded. |
-| Achromaticity and atmosphere | Not measurable from the single-band TESS photometry used here; proxy values are excluded. |
-
-These checks are evidence for ranking candidates, not substitutes for independent validation or follow-up observations.
 ---
 
+## 🚀 How It Works
 
-## 🏗️ Pipeline Architecture
+Give the pipeline a CSV of TIC IDs. It retrieves TESS light curves from the [MAST archive](https://archive.stsci.edu/), searches for repeating transit-like dips, adds [Gaia DR3](https://www.cosmos.esa.int/web/gaia/dr3) stellar information when available, and evaluates each extracted candidate using the physics evidence present in the data.
 
+The patched pipeline is **physics-led**: a signal must first pass the transit detection gate. Random Forest then helps classify a physically admitted candidate; XGBoost is available as a fit-error fallback. A model score or catalogue match cannot turn a signal that failed the physics gate into a `TRANSIT`.
+
+> [!IMPORTANT]
+> `TRANSIT` means **transit candidate**. It does not mean the planet is confirmed. Confirmation requires authoritative catalogue evidence or follow-up observations.
+
+### 🎯 Patched transit gate
+
+- Harmonic check must pass.
+- TLS SDE must be **≥ 3.0**.
+- If TLS cannot return an SDE, the fallback is BLS SDE **≥ 10.0**.
+- A measured physics composite **≥ 0.70** can support `TRANSIT` without ML.
+- Otherwise, ML score **≥ 0.60** may support classification only after the physics gate passes.
+
+The displayed confidence score continues to combine **60% physics and 40% ML**. The gate determines whether ML can participate in a transit decision; the weighted score expresses candidate confidence.
+
+---
+
+## 🏗️ Pipeline Stages
+
+| Stage | Name | What happens |
+|---:|---|---|
+| 1 | 📥 Preprocess | Retrieve, clean, and detrend TESS photometry. |
+| 2 | 🔎 Transit search | Screen with BLS and refine detected periods with TLS. |
+| 3 | ⭐ Stellar context | Cross-match with Gaia DR3 for available stellar parameters. |
+| 4 | ⚛️ Physics checks | Calculate measurable transit and false-positive diagnostics. |
+| 5 | 🤖 Classification | Use Random Forest to classify candidates; XGBoost can rescue model fitting failures. |
+| 6 | 📐 Parameters | Estimate candidate parameters and uncertainties. |
+| 7 | 🎯 Scoring | Apply the physics gate and compute candidate confidence. |
+| 8 | 📊 Visualization | Generate diagnostic plots and a PDF report when requested. |
+
+```mermaid
+flowchart LR
+    A[🗂️ TIC IDs] --> B[📡 MAST / TESS]
+    B --> C[🧹 Preprocess]
+    C --> D[🔎 BLS]
+    D --> E[🎯 TLS]
+    E --> F[⭐ Gaia DR3]
+    F --> G[⚛️ Physics gate]
+    G --> H[🌲 Random Forest]
+    H -. fit fallback .-> X[🚀 XGBoost]
+    H --> I[📊 Candidate results]
+    I -. optional .-> J[🖼️ Plots and PDF]
 ```
-MAST (TESS) + Gaia DR3 + Curated Training Labels
-        |
-        v
-Stage 1: Preprocess  —  Download, clean, Savitzky-Golay detrend
-        |
-        v
-Stage 2: Detect      —  BLS screen -> TLS refine
-        |
-        v
-Stage 3: Gaia        —  DR3 cross-match for stellar params
-        |
-        v
-Stage 4: Physics     —  7 validation checks
-        |
-        v
-Stage 5: Classify  —  Supervised Random Forest, with XGBoost fit fallback
-        |
-        v
-Stage 6: Parameters  —  Bootstrap uncertainty estimation
-        |
-        v
-Stage 7: Ensemble    —  Weighted confidence scoring
-        |
-        v
-Stage 8: Visualize   —  Plots + PDF report
-```
 
 ---
 
-## Physics checks and limits
+## ⚛️ Physics Checks
 
-TESS light curves support transit-shape checks, but they do not provide every measurement needed to reject false positives. In the patched pipeline, unsupported or placeholder values are omitted from the model and physics score. The Stage 4 console table prints `N/A` for unavailable measurements; accompanying status columns explain why.
+These checks use the available TESS light curve and Gaia context. They are evidence for candidate screening; they do not reproduce Hubble or JWST observations.
 
-| Check | What the available data support |
-|---|---|
-| Depth vs. Gaia radius | A rough size-consistency check when a valid stellar radius is available. |
-| Ingress/egress shape | A light-curve shape score that can flag V-shaped or grazing events. |
-| Secondary eclipse | A search near the expected phase when coverage is sufficient. |
-| Odd/even depths | A comparison when enough events are observed. |
-| Ellipsoidal variation | A modulation check when signal and coverage support it. |
-| Centroid motion | Unavailable in the patched classifier; not measured. |
-| Achromaticity and atmosphere | Unavailable from the single-band TESS photometry used here. |
+| Diagnostic | What it checks | Status in patched pipeline |
+|---|---|---|
+| Depth vs. Gaia radius 🔭 | Whether the measured depth is broadly consistent with the available stellar radius | Scored when valid Gaia radius is available |
+| Ingress/egress shape 📈 | Transit shape clues, including V-shaped or grazing events | Scored when the light curve supports it |
+| Secondary eclipse 🌑 | Additional dimming near the expected secondary phase | Scored when coverage supports it |
+| Odd/even depths 🔁 | Alternating transit depths that may indicate an eclipsing binary | Scored when enough events are available |
+| Ellipsoidal variation ✨ | Orbital brightness modulation associated with close companions | Scored when measurable |
+| Achromaticity 🌈 | Wavelength-dependent transit depth | Unavailable with this single-band TESS input |
+| Atmosphere 🌫️ | Spectroscopic atmosphere evidence | Unavailable without spectroscopy |
+| Centroid motion 🎯 | Transit-correlated source-position shift | Not measured in this patched run |
 
-A candidate is not a confirmed planet; catalogue follow-up or independent validation is still required.
+Unavailable checks are displayed as **N/A**, carry an explanatory status in the feature output, and are left out of the physics composite. The pipeline does not replace missing measurements with guessed scores.
+
 ---
 
-## Validation Results
+## 📈 Validation Snapshot
 
-Latest patched 50-TIC benchmark (SDE 4.0 primary, 2.5 rescue) produced 45 candidates. Strict overall class accuracy was 42.0% (21/50). Strict transit recall was 91.7% (11/12), with 35.5% precision (11/31): many nonplanets were called transits. This is a benchmark result, not a blind estimate for arbitrary new TICs. See [the detailed report](outputs/patched_master50_sde4/final_accuracy_report.md).
+The latest reviewed catalogue comparison covered 27 TIC IDs. Eighteen had decisive source labels: 13 confirmed transiting planets and five EB-only catalogue targets. Two of those TIC IDs also occur in training labels/features.
 
-There are 18 usable labeled feature rows (27 labels total). Leave-One-Out accuracy was 72.2% and balanced accuracy 62.5%. The data do not support an 89% general accuracy claim; expanding and independently validating the training set remains necessary.
+| Metric | Result |
+|---|---:|
+| Transit vs. non-transit accuracy, all 18 labeled targets | **17/18 · 94.4%** |
+| Transit vs. non-transit accuracy, excluding the two overlapping TICs | **15/16 · 93.8%** |
+| Confirmed planets called `TRANSIT` in overlap-excluded subset | **10/11 · 90.9%** |
+| EB-only targets not called `TRANSIT` | **5/5 · 100%** |
+| Exact 3-class accuracy, overlap-excluded subset | **13/16 · 81.3%** |
+| EB subtype classification | **3/5 · 60.0%** |
+
+The comparison batch and labels were reviewed while refining thresholds, so these results are **not an independent benchmark**. Nine targets without decisive labels were excluded. One confirmed planet was not extracted as a candidate, and one selected period did not match its catalogue period.
+
+📄 [Open the detailed validation report](outputs/physics_na_fix_test_no_planets/accuracy_report.md) · 🧾 [Inspect per-TIC labels and predictions](outputs/physics_na_fix_test_no_planets/catalog_accuracy_crosscheck.csv)
+
 ---
 
 ## ⚡ Quick Start
 
-```bash
-# 📦 Install dependencies
+### 1. Install dependencies
+
+```powershell
 pip install -r requirements.txt
-
-# Patched real-TIC pipeline (supervised classifier + catalog period check)
-python run_pipeline_patched.py --tic-ids data/tic_ids.csv  # Stage 8 is skipped by default
-
-# 🎲 Demo mode — synthetic data, no network required
-python run_pipeline.py --demo --demo-n 200
-
-# 🧪 Validation run — 10 new TIC IDs
-python3 -B run_pipeline.py --tic-ids data/test_tic_ids_10.csv --sde-threshold 2.5
-
-# 🧪 Validation run — 20 mixed targets with known labels
-python3 -B run_pipeline.py --tic-ids data/test_confirmed_planets.csv --sde-threshold 2.5
-
-# 🚀 Production run — full sector
-python run_pipeline.py --tic-ids data/tic_ids.csv --sector 14
-
-# 💾 Resume from cached preprocessing
-python run_pipeline.py --tic-ids data/tic_ids.csv --sector 14 --skip-download
 ```
 
-### Patched classifier notes
+### 2. Prepare a TIC ID CSV
 
-`run_pipeline_patched.py` uses Random Forest with XGBoost as a fit-error fallback and combines physics (60%) with ML (40%). Stage 8 plotting and PDF generation are skipped by default; explicitly pass `--stages 1,2,3,4,5,6,7,8` to request them. `transit_screening_flag` is a broad candidate-review marker, not confirmation. Physics checks that the available single-band TESS data cannot measure are shown as unavailable and excluded from scoring. The latest benchmark is in [the validation report](outputs/patched_master50_sde4/final_accuracy_report.md).
+The input file needs a `tic_id` column:
+
+```csv
+tic_id
+138361973
+349518145
+```
+
+### 3. Run the patched pipeline
+
+```powershell
+python run_pipeline_patched.py --tic-ids data/master_test.csv
+```
+
+The patched runner skips Stage 8 visualization by default. To request plots and the PDF report:
+
+```powershell
+python run_pipeline_patched.py --tic-ids data/master_test.csv --stages 1,2,3,4,5,6,7,8
+```
+
+See all supported options:
+
+```powershell
+python run_pipeline_patched.py --help
+```
+
+⏳ Runtime depends on MAST availability, TESS sector coverage, and the number of TIC IDs. Inputs with no extracted BLS/TLS candidate will not have a candidate classification row.
+
 ---
 
 ## 📁 Project Structure
 
-```
-tess-transit-pipeline/
-├── config/
-│   └── default.yaml              # ⚙️ Pipeline parameters
-├── data/
-│   ├── processed/                # Detrended .npz files
-│   ├── candidates/               # BLS+TLS detection outputs
-│   ├── gaia_cache/               # Cached stellar parameters
-│   ├── training/                 # Curated label CSVs
-│   ├── test_tic_ids_10.csv       # 10-target blind test set
-│   └── test_confirmed_planets.csv # 20-target mixed validation set
-├── models/                       # Trained XGBoost + scalers
-├── outputs/
-│   ├── results/                  # candidate_predictions.csv
-│   ├── plots/                    # Per-candidate diagnostics
-│   └── reports/                  # PDF summary report
-├── tess_pipeline/
-│   ├── stage1_preprocess.py      # 📥 Download, clean, detrend
-│   ├── stage2_detect.py          # 🔍 BLS screen + TLS refine
-│   ├── stage3_gaia.py            # ⭐ Gaia DR3 cross-match
-│   ├── stage4_physics.py         # ⚛️ 7 physics checks
-│   ├── stage5_classify.py        # 🤖 base ML classifier; patched runner uses RF + XGBoost fallback
-│   ├── stage6_params.py          # 📐 Bootstrap parameter fitting
-│   ├── stage7_ensemble.py        # 🎯 Confidence scoring
-│   ├── stage8_visualize.py       # 📊 Plots + PDF generation
-│   └── demo_data.py              # 🎲 Synthetic test data
-├── run_pipeline.py               # 🚀 Main entry point
-└── requirements.txt              # 📦 Python dependencies
+```text
+config/                  ⚙️ Pipeline configuration
+data/                    🗂️ TIC lists and curated labels
+patches/                 🩹 Patched pipeline behavior
+tess_pipeline/           🔭 Processing, detection, physics, ML, and output stages
+run_pipeline.py          ▶️ Base pipeline runner
+run_pipeline_patched.py  🚀 Patched pipeline runner
+outputs/                 📦 Run artifacts and validation reports
 ```
 
 ---
 
 ## ⚙️ Configuration
 
-Pipeline behavior is controlled via `config/default.yaml`:
+Main defaults are in [`config/default.yaml`](config/default.yaml). The patched run used BLS SDE **4.0** for the primary search; the physics gate applies TLS SDE **3.0** and the high-SDE BLS fallback described above. CLI options can override runtime settings; use `--help` to see available options.
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `bls.sde_threshold` | 7.0 | Minimum BLS Signal Detection Efficiency |
-| `detrend.sg_window` | 0.5 days | Savitzky-Golay smoothing window |
-| `ensemble.ml_weight` | 0.40 | ML contribution to final score |
-| `ensemble.physics_weight` | 0.60 | Physics contribution to final score |
-| `classify.threshold_transit` | 0.65 | Score threshold for TRANSIT label |
-| `classify.threshold_uncertain` | 0.35 | Score threshold for UNCERTAIN label |
+The confidence weighting is configured as **60% physics / 40% ML**. The patched transit gate still applies before ML can support a transit classification.
 
 ---
 
 ## 📊 Output Files
 
-| File | Description |
-|------|-------------|
-| `outputs/results/candidate_predictions.csv` | Final classifications with confidence scores |
-| `outputs/results/candidate_parameters.csv` | Fitted transit parameters and uncertainties |
-| `outputs/plots/candidates/{tic_id}/` | Diagnostic plots per candidate |
-| `outputs/reports/pipeline_report.pdf` | Summary methodology and results report |
+| Output | Contents |
+|---|---|
+| `outputs/results/candidate_predictions.csv` | Candidate class, confidence, physics gate result, and supporting evidence |
+| `outputs/results/candidate_parameters.csv` | Fitted transit parameters and uncertainty estimates |
+| `data/processed/features.csv` | Measured features and availability statuses |
+| `outputs/plots/` | Candidate diagnostics when Stage 8 is requested |
+| `outputs/reports/` | PDF report when Stage 8 is requested |
+
+Actual paths follow the configured output directories and run settings.
 
 ---
 
-## 🏎️ Performance Notes
-
-- **Batch processing:** Stage 1 handles 100 curves per batch to manage memory.
-- **Parallel BLS:** 4 worker threads via `joblib`.
-- **TLS optimization:** TLS runs only on BLS candidates, not the full sector.
-- **Centroid sampling:** Computed only for the top 10% of candidates by SDE.
-- **Memory hygiene:** `plt.close()` after every figure to prevent RAM accumulation.
-- **No GPU required:** XGBoost trains in under 30 seconds on a modern CPU.
-
-### Estimated Runtime (per TESS sector, CPU-only)
-
-| Stage | Estimated Time |
-|-------|---------------|
-| 1. Preprocess | 4–6 hours |
-| 2. BLS + TLS | 4–7 hours |
-| 3. Gaia cross-match | 1–2 hours |
-| 4–7. Physics + ML + Ensemble | ~15 minutes |
-| 8. Plots (top 100 candidates) | ~10 minutes |
-
-
----
-
-## 📦 Requirements
+## 🧰 Requirements
 
 - Python 3.8+
-- lightkurve
-- astropy
-- transitleastsquares
-- harmonica
-- scikit-learn
-- xgboost
-- matplotlib
-- reportlab
-- pandas, numpy, scipy
-- joblib
+- NumPy, SciPy, pandas, scikit-learn, XGBoost
+- Astropy, Lightkurve, Astroquery, Transit Least Squares
+- Matplotlib, Joblib, PyYAML, tqdm, ReportLab
 
-See `requirements.txt` for pinned dependency versions.
+Install the pinned dependency ranges from [`requirements.txt`](requirements.txt). The pipeline is designed to run on CPU; no GPU is required.
 
 ---
 
-#   E x o p l a n e t - 2 . 0  
- 
+<div align="center">
+
+🔭 **Search the signal · test the physics · review the candidate**
+
+</div>

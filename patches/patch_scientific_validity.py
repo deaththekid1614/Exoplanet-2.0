@@ -11,6 +11,12 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# Stage 2 supplies the physical transit gate. The model can confirm a moderate
+# physics signal, but cannot create a transit when TLS/harmonics reject it.
+MIN_TRANSIT_TLS_SDE = 3.0
+MIN_ML_SUPPORT_SCORE = 0.60
+PHYSICS_OVERRIDE_SCORE = 0.70
+
 def _as_float(row: pd.Series, name: str, default: float = np.nan) -> float:
     try:
         value = float(row.get(name, default))
@@ -57,25 +63,46 @@ def _score_row(row: pd.Series) -> pd.Series:
     physics = _physics_score(row)
     score = float(np.clip(classifier.PHYSICS_WEIGHT * physics + classifier.ML_WEIGHT * ml, 0.0, 1.0))
 
-    # This is a broad candidate review flag only, never a confirmation.
-    screening_flag = bool(ml >= 0.40 and score >= 0.50)
+    tls_sde = _as_float(row, "tls_sde", np.nan)
+    bls_sde = _as_float(row, "sde", 0.0)
+    harmonic_ok = _truthy(row.get("harmonic_test_passed", False))
+    tls_confirmed = tls_sde >= MIN_TRANSIT_TLS_SDE
+    # TLS can legitimately fail to refine a strong BLS signal. Keep that
+    # fallback only for high-SDE BLS candidates that also pass harmonic checks.
+    bls_fallback = not np.isfinite(tls_sde) and bls_sde >= 10.0
+    physics_detector_pass = bool(harmonic_ok and (tls_confirmed or bls_fallback))
+    physics_detector_reason = (
+        "TLS_AND_HARMONIC_PASS" if harmonic_ok and tls_confirmed else
+        "HIGH_SDE_BLS_FALLBACK_AND_HARMONIC_PASS" if harmonic_ok and bls_fallback else
+        "HARMONIC_REVIEW_REQUIRED" if not harmonic_ok else
+        "TLS_SDE_TOO_LOW_OR_UNAVAILABLE"
+    )
+    physics_override = bool(physics_detector_pass and physics >= PHYSICS_OVERRIDE_SCORE)
+    # ML only decides whether an already physics-admitted event is planetary;
+    # it cannot promote a BLS/TLS or harmonic failure to TRANSIT.
+    ml_supported_transit = bool(physics_detector_pass and ml >= MIN_ML_SUPPORT_SCORE)
+    screening_flag = bool(physics_override or ml_supported_transit)
     sec = _as_float(row, "nosec_score")
     odd_even = _as_float(row, "oddeven_score")
     ellipsoidal = _as_float(row, "ellipsoidal_score")
     eb_evidence = any(np.isfinite(x) and x <= 0.25 for x in (sec, odd_even, ellipsoidal))
 
-    if score >= 0.50 and ml >= 0.40:
+    if physics_override or ml_supported_transit:
         label = "TRANSIT"
         confidence = score
+        classification_basis = "physics_override" if physics_override else "physics_plus_ml"
     elif eb_evidence and ml < 0.60:
         label = "ECLIPSING_BINARY"
         confidence = 1.0 - score
+        classification_basis = "physics_eclipsing_evidence"
     elif score <= 0.30 and ml <= 0.25:
         label = "FALSE_POSITIVE"
         confidence = 1.0 - score
+        classification_basis = "low_physics_and_ml_support"
     else:
         label = "UNCERTAIN"
         confidence = 0.5 + abs(score - 0.5)
+        classification_basis = "insufficient_physics_support"
 
     if label == "TRANSIT":
         tier = "High" if score >= 0.75 else "Medium" if score >= 0.60 else "Low"
@@ -91,6 +118,9 @@ def _score_row(row: pd.Series) -> pd.Series:
         "ml_score": ml,
         "transit_screening_flag": screening_flag,
         "transit_screening_score": score,
+        "physics_detector_pass": physics_detector_pass,
+        "physics_detector_reason": physics_detector_reason,
+        "transit_classification_basis": classification_basis,
         "catalog_match_used_for_classification": False,
     })
 
@@ -239,4 +269,8 @@ def apply() -> None:
     ensemble.compute_ensemble_score = _score_row
     ensemble.run_ensemble_scoring = classifier.patched_run_ensemble_scoring
     logger.info("Scientific validity patch active: measured physics only; archive is annotation-only")
-    print("  Patched scoring: measured physics (60%) + ML (40%); archive labels cannot force TRANSIT")
+    print(
+        "  Patched detector: TLS SDE >= 3 (or BLS SDE >= 10 when TLS is missing) + harmonic pass; "
+        "physics >= 0.70 can override ML, otherwise ML >= 0.60 supports a gated transit; "
+        "archive labels cannot force TRANSIT"
+    )
