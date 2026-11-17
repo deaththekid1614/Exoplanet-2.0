@@ -1,0 +1,2 @@
+tic_id,source_id,teff,logg,r_star,mass,bp_rp,expected_earth_depth,expected_jupiter_depth,query_status,query_source
+1000003,,5778.0,4.44,1.0,1.0,0.82,8.405017877225196e-05,0.010560169441850946,FALLBACK,sun-like_default

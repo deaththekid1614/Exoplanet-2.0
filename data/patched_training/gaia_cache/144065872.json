@@ -1,0 +1,13 @@
+{
+  "tic_id": 144065872,
+  "source_id": 6518399301667782016,
+  "teff": 5718.4921875,
+  "logg": 4.2357001304626465,
+  "r_star": 1.243399977684021,
+  "mass": 0.9669470191001892,
+  "bp_rp": 0.8288803100585938,
+  "expected_earth_depth": 5.4364691890855254e-05,
+  "expected_jupiter_depth": 0.006830447792110861,
+  "query_status": "SUCCESS",
+  "query_source": "gaia_dr3"
+}

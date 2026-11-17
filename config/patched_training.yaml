@@ -1,0 +1,70 @@
+paths:
+  raw: data/patched_training/raw
+  processed: data/patched_training/processed
+  candidates: data/patched_training/candidates
+  gaia_cache: data/patched_training/gaia_cache
+  training: data/real_training
+  models: data/patched_training/models
+  results: data/patched_training/results
+  plots: data/patched_training/plots
+  reports: data/patched_training/reports
+preprocess:
+  batch_size: 25
+  savgol_window_days: 0.5
+  savgol_polyorder: 3
+  quality_bitmask: default
+  synthetic_validation_count: 0
+  synthetic_recovery_threshold: 0.95
+  n_jobs: 2
+detection:
+  period_min: 0.5
+  period_max: 27.0
+  bls_sde_threshold: 4.0
+  bls_duration_grid: [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.10]
+  n_jobs: 2
+  tls_oversampling: 10
+  tls_duration_grid: [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.10]
+gaia:
+  cache_enabled: true
+  query_batch_size: 50
+  retry_attempts: 2
+  retry_delay_seconds: 3
+physics:
+  centroid_top_fraction: 0.1
+  centroid_shift_threshold_pixels: 0.1
+  secondary_eclipse_alpha: 0.05
+  odd_even_ratio_tolerance: 0.25
+  achromaticity_bands: [UV, Blue, Green, Yellow, Red, IR]
+classification:
+  train_split: 0.8
+  random_seed: 42
+parameters:
+  bootstrap_iterations: 50
+  mandel_agol_oversample: 5
+ensemble:
+  weights:
+    ml_probability: 0.3
+    depth_check: 0.15
+    shape_check: 0.15
+    eclipse_check: 0.1
+    centroid_check: 0.1
+    odd_even_check: 0.1
+    achromaticity: 0.1
+  thresholds:
+    transit_high: 0.75
+    transit_medium: 0.55
+    eclipse: 0.8
+    blend: 0.75
+    stellar_activity: 0.75
+    uncertain_low: 0.25
+    reject: 0.25
+visualization:
+  top_n_candidates: 100
+  dpi: 80
+  figure_format: png
+pipeline:
+  sector: null
+  max_curves: null
+  tic_ids_file: null
+  skip_download: false
+  demo_mode: false

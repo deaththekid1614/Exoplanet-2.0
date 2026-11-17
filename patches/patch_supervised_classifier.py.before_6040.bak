@@ -1,0 +1,379 @@
+"""Replace brittle score rules with a labeled, held-out-checked classifier.
+
+The model is trained only from feature rows for the curated real TIC labels.
+If the training feature set is missing or single-class, predictions stay
+UNCERTAIN instead of inventing confidence from hand-written cutoffs.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from pathlib import Path
+
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, confusion_matrix
+from sklearn.model_selection import LeaveOneOut
+from sklearn.pipeline import make_pipeline
+
+logger = logging.getLogger(__name__)
+ROOT = Path(__file__).resolve().parents[1]
+LABELS_PATH = ROOT / "data" / "real_training" / "training_labels.csv"
+FEATURES_PATH = ROOT / "data" / "real_training" / "candidate_features.csv"
+METRICS_PATH = ROOT / "data" / "real_training" / "patched_validation.json"
+MODEL_PATH = ROOT / "data" / "real_training" / "patched_classifier.joblib"
+CATALOG_CACHE = ROOT / "data" / "real_training" / "confirmed_planet_cache"
+
+FEATURES = [
+    "depth_score", "shape_score", "nosec_score", "oddeven_score",
+    "achrom_score", "atmos_score", "det_quality", "log_oot_std",
+    "skewness", "log_period", "log_depth", "relative_duration",
+    "log_bls_sde", "log_tls_sde", "stellar_radius", "stellar_teff",
+    "ellipsoidal_score", "centroid_score",
+]
+
+
+def _first(row: pd.Series, names: tuple[str, ...], default: float = np.nan) -> float:
+    for name in names:
+        if name in row.index and pd.notna(row[name]):
+            try:
+                value = float(row[name])
+                if np.isfinite(value):
+                    return value
+            except (TypeError, ValueError):
+                continue
+    return default
+
+
+def _feature_row(row: pd.Series) -> dict[str, float]:
+    period = _first(row, ("period",), np.nan)
+    depth = _first(row, ("depth",), np.nan)
+    duration = _first(row, ("duration",), np.nan)
+    bls = _first(row, ("bls_sde", "sde"), np.nan)
+    tls = _first(row, ("tls_sde",), np.nan)
+    det_quality = min(max((bls + tls) / 30.0, 0.0), 1.0) if np.isfinite(bls + tls) else np.nan
+    return {
+        "depth_score": _first(row, ("depth_score", "depth_consistency_score")),
+        "shape_score": _first(row, ("shape_score",)),
+        "nosec_score": _first(row, ("nosec_score", "secondary_eclipse_score")),
+        "oddeven_score": _first(row, ("oddeven_score", "odd_even_score")),
+        "achrom_score": _first(row, ("achrom_score", "achromaticity_score")),
+        "atmos_score": _first(row, ("atmos_score", "atmosphere_proxy_score")),
+        "det_quality": _first(row, ("det_quality",), det_quality),
+        "log_oot_std": np.log1p(max(_first(row, ("oot_std",), np.nan), 0.0) * 1e4)
+            if np.isfinite(_first(row, ("oot_std",))) else np.nan,
+        "skewness": _first(row, ("skewness",)),
+        "log_period": np.log10(period) if period > 0 else np.nan,
+        "log_depth": np.log10(depth) if depth > 0 else np.nan,
+        "relative_duration": duration / period if duration > 0 and period > 0 else np.nan,
+        "log_bls_sde": np.log1p(max(bls, 0.0)) if np.isfinite(bls) else np.nan,
+        "log_tls_sde": np.log1p(max(tls, 0.0)) if np.isfinite(tls) else np.nan,
+        "stellar_radius": _first(row, ("r_star",)),
+        "stellar_teff": _first(row, ("teff",)) / 6000.0
+            if np.isfinite(_first(row, ("teff",))) else np.nan,
+        "ellipsoidal_score": _first(row, ("ellipsoidal_score",), 0.5),
+        "centroid_score": _first(row, ("centroid_score", "centroid_check_score"), 0.5),
+    }
+
+
+def _training_rows() -> tuple[pd.DataFrame, np.ndarray] | None:
+    if not LABELS_PATH.exists() or not FEATURES_PATH.exists():
+        return None
+    labels = pd.read_csv(LABELS_PATH)
+    features = pd.read_csv(FEATURES_PATH)
+    if not {"tic_id", "label"}.issubset(labels.columns) or "tic_id" not in features:
+        return None
+    labels["tic_id"] = pd.to_numeric(labels["tic_id"], errors="coerce")
+    features["tic_id"] = pd.to_numeric(features["tic_id"], errors="coerce")
+    labels = labels.dropna(subset=["tic_id"]).drop_duplicates("tic_id", keep="last")
+    joined = features.merge(labels[["tic_id", "label"]], on="tic_id", how="inner")
+    joined["target"] = joined["label"].astype(str).str.strip().str.lower().map(
+        lambda x: 1 if x in {"planet", "confirmed_planet", "transit"} else
+        0 if x in {"not_planet", "eclipse", "eclipsing_binary", "blend", "false_positive", "noise", "stellar_activity", "harmonic_alias"} else np.nan
+    )
+    joined = joined.dropna(subset=["target"])
+    joined = joined.drop_duplicates("tic_id", keep="last")
+    if len(joined) < 8 or joined["target"].nunique() != 2:
+        logger.warning("Insufficient labeled candidate features to train classifier (%d rows)", len(joined))
+        return None
+    X = pd.DataFrame([_feature_row(row) for _, row in joined.iterrows()], columns=FEATURES)
+    y = joined["target"].astype(int).to_numpy()
+    return X, y
+
+
+def _new_model():
+    return make_pipeline(
+        SimpleImputer(strategy="median", add_indicator=True),
+        RandomForestClassifier(n_estimators=300, max_depth=5, min_samples_leaf=2,
+                               class_weight="balanced", random_state=42, n_jobs=-1),
+    )
+
+
+def _new_fallback_model(y: np.ndarray):
+    from xgboost import XGBClassifier
+    negatives = max(int(np.sum(y == 0)), 1)
+    positives = max(int(np.sum(y == 1)), 1)
+    return make_pipeline(
+        SimpleImputer(strategy="median", add_indicator=True),
+        XGBClassifier(n_estimators=120, max_depth=2, learning_rate=0.05,
+                      subsample=0.85, colsample_bytree=0.85,
+                      scale_pos_weight=negatives / positives,
+                      eval_metric="logloss", random_state=42, n_jobs=1),
+    )
+
+
+def _fit_with_fallback(X: pd.DataFrame, y: np.ndarray):
+    """Fit RF first; use XGBoost only if RF fitting raises an error."""
+    try:
+        return _new_model().fit(X, y), "random_forest"
+    except Exception as rf_error:
+        logger.warning("Random Forest fit failed; trying XGBoost fallback: %s", rf_error)
+        try:
+            return _new_fallback_model(y).fit(X, y), "xgboost"
+        except Exception:
+            logger.exception("XGBoost fallback also failed")
+            return None, "unavailable"
+
+
+def _fit_model():
+    data = _training_rows()
+    if data is None:
+        # Never leave an old score/model artifact looking like it validates the
+        # current labels. A supervised fit requires at least two trustworthy classes.
+        METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        METRICS_PATH.write_text(json.dumps({
+            "evaluation": "not_available",
+            "reason": "insufficient labeled candidate rows from at least two classes",
+            "n_candidates": 0,
+            "accuracy": None,
+            "balanced_accuracy": None,
+        }, indent=2), encoding="utf-8")
+        if MODEL_PATH.exists():
+            MODEL_PATH.unlink()
+        return None
+    X, y = data
+    try:
+        if len(y) >= 8 and min(np.bincount(y)) >= 2:
+            oof = np.zeros_like(y)
+            fallback_folds = 0
+            for train_idx, test_idx in LeaveOneOut().split(X):
+                fold_model, backend = _fit_with_fallback(X.iloc[train_idx], y[train_idx])
+                if fold_model is None:
+                    oof[test_idx] = 0
+                else:
+                    fallback_folds += backend == "xgboost"
+                    oof[test_idx] = fold_model.predict(X.iloc[test_idx])
+            metrics = {
+                "evaluation": "leave_one_out_candidate_level",
+                "n_candidates": int(len(y)),
+                "class_counts": {"not_planet": int(np.sum(y == 0)), "planet": int(np.sum(y == 1))},
+                "accuracy": float(accuracy_score(y, oof)),
+                "balanced_accuracy": float(balanced_accuracy_score(y, oof)),
+                "confusion_matrix_labels_0_1": confusion_matrix(y, oof, labels=[0, 1]).tolist(),
+                "fallback_folds": int(fallback_folds),
+            }
+            METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            METRICS_PATH.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+            logger.info("Patched classifier LOO: n=%d accuracy=%.3f balanced_accuracy=%.3f",
+                        len(y), metrics["accuracy"], metrics["balanced_accuracy"])
+        model, backend = _fit_with_fallback(X, y)
+        if model is None:
+            return None
+        model._patched_backend = backend
+        MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(model, MODEL_PATH)
+        return model
+    except Exception:
+        logger.exception("Could not fit patched classifier")
+        return None
+
+
+def _confirmed_planet_periods(tic_ids: list[int]) -> dict[int, list[float]]:
+    """Look up known confirmed planets; empty/error responses are cached too."""
+    result: dict[int, list[float]] = {}
+    pending = sorted(set(map(int, tic_ids)))
+    for tic_id in pending[:]:
+        cache_path = CATALOG_CACHE / f"{tic_id}.json"
+        if cache_path.exists():
+            try:
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                cached_periods = [float(x) for x in cached.get("periods", []) if float(x) > 0]
+                # Negative lookups expire quickly because archive aliases and TAP
+                # responses can be incomplete or temporarily stale.
+                ttl = 7 * 86400 if cached_periods else 6 * 3600
+                if time.time() - float(cached.get("checked_at", 0)) < ttl:
+                    result[tic_id] = cached_periods
+                    pending.remove(tic_id)
+                    continue
+            except Exception:
+                pass
+    if pending:
+        try:
+            from astroquery.ipac.nexsci.nasa_exoplanet_archive import NasaExoplanetArchive
+            # Query the TIC host identifier. Planet names need not contain the
+            # TIC identifier (e.g. WASP-62 b and LTT 1445 A b).
+            where = " OR ".join(f"tic_id like 'TIC {tic_id}%'" for tic_id in pending)
+            table = NasaExoplanetArchive.query_criteria(
+                table="pscomppars", select="tic_id,pl_name,pl_orbper", where=where)
+            for tic_id in pending:
+                result[tic_id] = []
+            if table is not None and len(table):
+                for row in table:
+                    host = str(row["tic_id"])
+                    digits = "".join(ch for ch in host if ch.isdigit())
+                    host_id = int(digits) if digits else None
+                    value = row["pl_orbper"]
+                    if host_id in result and value is not None and not np.ma.is_masked(value):
+                        period = float(value.to_value("d")) if hasattr(value, "to_value") else float(value)
+                        if np.isfinite(period) and period > 0:
+                            result[host_id].append(period)
+        except Exception as exc:
+            logger.info("NASA Exoplanet Archive batch lookup unavailable: %s", exc)
+            result.update({tic_id: [] for tic_id in pending})
+            # Per-object lookup is a slower fallback for TAP outages.
+            try:
+                from astroquery.ipac.nexsci.nasa_exoplanet_archive import NasaExoplanetArchive
+                for tic_id in pending:
+                    table = NasaExoplanetArchive.query_object(f"TIC {tic_id}", table="pscomppars")
+                    if table is not None and len(table) and "pl_orbper" in table.colnames:
+                        for value in table["pl_orbper"]:
+                            if value is not None and not np.ma.is_masked(value):
+                                period = float(value.to_value("d")) if hasattr(value, "to_value") else float(value)
+                                if np.isfinite(period) and period > 0:
+                                    result[tic_id].append(period)
+            except Exception as fallback_exc:
+                logger.info("NASA Exoplanet Archive lookup fallback unavailable: %s", fallback_exc)
+        for tic_id in pending:
+            periods = result.get(tic_id, [])
+            result[tic_id] = periods
+            cache_path = CATALOG_CACHE / f"{tic_id}.json"
+            try:
+                CATALOG_CACHE.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(json.dumps({"tic_id": tic_id, "periods": periods,
+                                                  "checked_at": time.time()}, indent=2), encoding="utf-8")
+            except OSError:
+                pass
+    return result
+
+
+def patched_run_ml_classification(candidates: pd.DataFrame, config: dict,
+                                  force_retrain: bool = False) -> pd.DataFrame:
+    if candidates is None or candidates.empty:
+        return pd.DataFrame()
+    rows = candidates.copy().reset_index(drop=True)
+    model = _fit_model()
+    scores = np.full(len(rows), 0.5, dtype=float)
+    if model is not None:
+        X = pd.DataFrame([_feature_row(row) for _, row in rows.iterrows()], columns=FEATURES)
+        probabilities = model.predict_proba(X)
+        classes = model.named_steps[next(reversed(model.named_steps))].classes_
+        planet_col = int(np.flatnonzero(classes == 1)[0])
+        scores = probabilities[:, planet_col]
+    rows["vetoed"] = False
+    rows["veto_cls"] = ""
+    rows["ml_score"] = scores
+    rows["ml_model_backend"] = getattr(model, "_patched_backend", "unavailable") if model is not None else "unavailable"
+    planet_periods = _confirmed_planet_periods(rows["tic_id"].astype(int).tolist())
+    matched = []
+    matched_period = []
+    for _, row in rows.iterrows():
+        period = _first(row, ("period",), np.nan)
+        candidates_known = planet_periods.get(int(row["tic_id"]), [])
+        match = next((known for known in candidates_known if np.isfinite(period)
+                      and abs(period - known) <= max(0.01, 0.01 * known)), None)
+        matched.append(match is not None)
+        matched_period.append(float(match) if match is not None else np.nan)
+    rows["catalog_confirmed_period_match"] = matched
+    rows["catalog_period_days"] = matched_period
+    rows["ml_confidence"] = np.maximum(scores, 1.0 - scores)
+    rows["classification"] = np.where(scores >= 0.75, "TRANSIT",
+        np.where(scores <= 0.25, "FALSE_POSITIVE", "UNCERTAIN"))
+    rows["noise_percent"] = ((1.0 - rows["ml_confidence"]) * 100).round(1)
+    output = Path(config["paths"]["results"]) / "ml_predictions.csv"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    rows.to_csv(output, index=False)
+    logger.info("Patched supervised predictions saved to %s (backend=%s)", output,
+                getattr(model, "_patched_backend", "unavailable") if model is not None else "unavailable")
+    return rows
+
+
+def patched_compute_ensemble_score(row: pd.Series) -> pd.Series:
+    """Use supervised probability; physics is a modest corroborating signal."""
+    from tess_pipeline.stage7_ensemble import compute_physics_composite
+    ml = float(np.clip(row.get("ml_score", 0.5), 0.0, 1.0))
+    physics = compute_physics_composite(row)
+    # Never promote a candidate using physics thresholds alone.
+    score = float(np.clip(0.85 * ml + 0.15 * physics, 0.0, 1.0))
+    if bool(row.get("catalog_confirmed_period_match", False)):
+        classification = "TRANSIT"
+        score = max(score, 0.95)
+        confidence = 0.99
+        tier = "High"
+    elif ml >= 0.85 and score >= 0.70 and float(row.get("tls_sde", 0.0)) >= 3.0:
+        classification = "TRANSIT"
+        confidence = score
+        tier = "High" if ml >= 0.9 and physics >= 0.6 else "Medium"
+    elif ml <= 0.25:
+        if float(row.get("nosec_score", row.get("secondary_eclipse_score", 1.0))) < 0.35 \
+                or float(row.get("oddeven_score", row.get("odd_even_score", 1.0))) < 0.35 \
+                or float(row.get("ellipsoidal_score", 1.0)) < 0.35:
+            classification = "ECLIPSING_BINARY"
+        else:
+            classification = "FALSE_POSITIVE"
+        confidence = 1.0 - score
+        tier = "Low" if confidence < 0.85 else "Medium"
+    else:
+        classification = "UNCERTAIN"
+        confidence = max(score, 1.0 - score)
+        tier = "Low" if abs(ml - 0.5) < 0.1 else "Medium"
+    return pd.Series({
+        "ensemble_score": score,
+        "final_classification": classification,
+        "confidence": float(confidence),
+        "confidence_tier": tier,
+        "physics_composite": float(physics),
+        "ml_score": ml,
+    })
+
+
+def patched_run_ensemble_scoring(candidates: pd.DataFrame, config: dict) -> pd.DataFrame:
+    """Stage 7 merge that carries confirmed-period evidence into the scorer."""
+    if candidates is None or candidates.empty:
+        return pd.DataFrame()
+    feature_path = Path(config["paths"]["processed"]) / "features.csv"
+    stage5_path = Path(config["paths"]["results"]) / "ml_predictions.csv"
+    base = pd.read_csv(feature_path) if feature_path.exists() else candidates.copy()
+    if stage5_path.exists():
+        stage5 = pd.read_csv(stage5_path)
+        keep = ["tic_id", "classification", "ml_confidence", "ml_score", "vetoed", "veto_cls",
+                "catalog_confirmed_period_match", "catalog_period_days"]
+        base = base.merge(stage5[[c for c in keep if c in stage5.columns]], on="tic_id", how="left")
+    if "catalog_confirmed_period_match" not in base:
+        base["catalog_confirmed_period_match"] = False
+    base["catalog_confirmed_period_match"] = base["catalog_confirmed_period_match"].fillna(False).astype(bool)
+    if "ml_score" not in base:
+        base["ml_score"] = 0.5
+    base["ml_score"] = pd.to_numeric(base["ml_score"], errors="coerce").fillna(0.5)
+    result = base.apply(patched_compute_ensemble_score, axis=1)
+    merged = pd.concat([base.reset_index(drop=True), result.reset_index(drop=True)], axis=1)
+    merged = merged.loc[:, ~merged.columns.duplicated()]
+    merged["final_score"] = merged["ensemble_score"]
+    merged["noise_percent"] = ((1.0 - merged["ensemble_score"].clip(0, 1)) * 100).round(1)
+    output = Path(config["paths"]["results"]) / "candidate_predictions.csv"
+    merged.to_csv(output, index=False)
+    logger.info("Patched ensemble saved to %s", output)
+    return merged
+
+
+def apply():
+    import tess_pipeline.stage5_classify as s5
+    import tess_pipeline.stage7_ensemble as s7
+    s5.run_ml_classification = patched_run_ml_classification
+    s7.compute_ensemble_score = patched_compute_ensemble_score
+    s7.run_ensemble_scoring = patched_run_ensemble_scoring
+    print("  Patched supervised classifier: real labels + leave-one-out evaluation")

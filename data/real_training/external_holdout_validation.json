@@ -1,0 +1,16 @@
+{
+  "n_candidates": 7,
+  "n_abstained_uncertain": 5,
+  "coverage": 0.2857142857142857,
+  "correct_among_decided": 2,
+  "decided": 2,
+  "selective_accuracy": 1.0,
+  "strict_accuracy": 0.2857142857142857,
+  "confusion_matrix_binary_planet_vs_not": {
+    "planet_correct": 1,
+    "planet_missed_or_abstained": 0,
+    "nonplanet_correct_decided": 1,
+    "nonplanet_missed_or_abstained": 5
+  },
+  "note": "Seven-case targeted independent holdout; abstentions count as incorrect for strict accuracy. Not a reliable estimate of general performance."
+}

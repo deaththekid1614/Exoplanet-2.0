@@ -1,0 +1,13 @@
+{
+  "tic_id": 1000003,
+  "source_id": null,
+  "teff": 5778.0,
+  "logg": 4.44,
+  "r_star": 1.0,
+  "mass": 1.0,
+  "bp_rp": 0.82,
+  "expected_earth_depth": 8.405017877225196e-05,
+  "expected_jupiter_depth": 0.010560169441850946,
+  "query_status": "FALLBACK",
+  "query_source": "sun-like_default"
+}

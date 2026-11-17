@@ -1,0 +1,28 @@
+tic_id,label,subtype,source
+150428135,planet,transit,TESS_confirmed
+410153553,planet,transit,TESS_confirmed
+38890006,planet,transit,TESS_confirmed
+382862991,planet,transit,TESS_confirmed
+219134,planet,transit,TESS_confirmed
+307210830,planet,transit,TESS_confirmed
+2733520,planet,transit,TESS_confirmed
+2441619,planet,transit,TESS_confirmed
+183120439,planet,transit,TESS_confirmed
+217897806,planet,transit,TESS_confirmed
+98796344,planet,transit,TESS_confirmed
+149603524,planet,transit,confirmed_planet:WASP-62 b
+268301217,planet,transit,confirmed_planet:TOI-1937 A b
+155867025,planet,transit,confirmed_planet:TOI-3714 b
+144065872,planet,transit,confirmed_planet:WASP-95 b
+281541555,planet,transit,confirmed_planet:HATS-46 b
+300843387,not_planet,stellar_activity,known_variable
+167418143,not_planet,eclipse,known_EB
+198008474,not_planet,stellar_activity,known_variable
+33521996,planet,transit,confirmed_planet:HATS-6 b
+140691463,planet,transit,confirmed_planet:TOI-157 b
+24935204,not_planet,eclipsing_binary,Prsa_et_al_2022_TESS_EB_catalog
+33419790,not_planet,eclipsing_binary,Prsa_et_al_2022_TESS_EB_catalog
+5674169,not_planet,eclipsing_binary,Prsa_et_al_2022_TESS_EB_catalog
+31690845,not_planet,eclipsing_binary,Prsa_et_al_2022_TESS_EB_catalog
+11046410,not_planet,eclipsing_binary,Prsa_et_al_2022_TESS_EB_catalog
+10891640,not_planet,eclipsing_binary,Prsa_et_al_2022_TESS_EB_catalog

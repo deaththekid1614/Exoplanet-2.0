@@ -1,0 +1,8 @@
+tic_id,old_label,corrected_label,planet_name,reference
+140691463,not_planet,planet,TOI-157 b,https://exoplanetarchive.ipac.caltech.edu/overview/TOI-157
+149603524,not_planet,planet,WASP-62 b,https://exoplanetarchive.ipac.caltech.edu/overview/WASP-62
+144065872,not_planet,planet,WASP-95 b,https://exofop.ipac.caltech.edu/tess/view_toi.php
+155867025,not_planet,planet,TOI-3714 b,https://ntrs.nasa.gov/api/citations/20230003194/downloads/Ca%C3%B1as_2022_AJ_164_50.pdf
+268301217,not_planet,planet,TOI-1937 A b,https://exoplanetarchive.ipac.caltech.edu/overview/TOI-1937%20A
+281541555,not_planet,planet,HATS-46 b,https://exoplanetarchive.ipac.caltech.edu/overview/HATS-46
+33521996,not_planet,planet,HATS-6 b,https://exoplanetarchive.ipac.caltech.edu/overview/HATS-6
