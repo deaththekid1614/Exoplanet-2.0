@@ -14,6 +14,7 @@ def apply_all_patches():
         "patch_stage1_download_fallback",
         "patch_supervised_classifier",
         "patch_scientific_validity",
+        "patch_measured_physics",
     ]
     
     for name in patches:

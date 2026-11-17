@@ -1,0 +1,21 @@
+{
+  "evaluation": "leave_one_out_candidate_level",
+  "n_candidates": 25,
+  "class_counts": {
+    "not_planet": 12,
+    "planet": 13
+  },
+  "accuracy": 0.84,
+  "balanced_accuracy": 0.8365384615384616,
+  "confusion_matrix_labels_0_1": [
+    [
+      9,
+      3
+    ],
+    [
+      1,
+      12
+    ]
+  ],
+  "fallback_folds": 0
+}

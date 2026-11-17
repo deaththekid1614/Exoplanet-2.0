@@ -1,0 +1,26 @@
+tic_id,label,subtype,source
+410153553,planet,transit,TESS_confirmed
+307210830,planet,transit,TESS_confirmed
+2733520,planet,transit,TESS_confirmed
+183120439,planet,transit,TESS_confirmed
+98796344,planet,transit,TESS_confirmed
+149603524,planet,transit,confirmed_planet:WASP-62 b
+268301217,planet,transit,confirmed_planet:TOI-1937 A b
+155867025,planet,transit,confirmed_planet:TOI-3714 b
+144065872,planet,transit,confirmed_planet:WASP-95 b
+281541555,planet,transit,confirmed_planet:HATS-46 b
+33521996,planet,transit,confirmed_planet:HATS-6 b
+140691463,planet,transit,confirmed_planet:TOI-157 b
+24935204,not_planet,eclipsing_binary,Prsa_et_al_2022_TESS_EB_catalog
+33419790,not_planet,eclipsing_binary,Prsa_et_al_2022_TESS_EB_catalog
+5674169,not_planet,eclipsing_binary,Prsa_et_al_2022_TESS_EB_catalog
+31690845,not_planet,eclipsing_binary,Prsa_et_al_2022_TESS_EB_catalog
+11046410,not_planet,eclipsing_binary,Prsa_et_al_2022_TESS_EB_catalog
+10891640,not_planet,eclipsing_binary,Prsa_et_al_2022_TESS_EB_catalog
+183374187,planet,external_literature,NASA Exoplanet Archive confirmed TIC 183374187 b | https://exoplanetarchive.ipac.caltech.edu/overview/TIC%20183374187
+296945443,not_planet,external_literature,MNRAS study identifies the transit-like signal as a background-source false positive | https://academic.oup.com/mnras/article/538/3/2031/8043272
+199716496,not_planet,external_literature,Published TESS eclipsing-binary study | https://oejv.physics.muni.cz/issues/oejv_0258.pdf
+435447013,not_planet,external_literature,Published TESS eclipsing-binary study | https://oejv.physics.muni.cz/issues/oejv_0258.pdf
+198385324,not_planet,external_literature,TESS eclipsing-binary catalog: single-transit EB example | https://ntrs.nasa.gov/api/citations/20220004728/downloads/article_Powell_TESS%20Eclipsing%20Binary%20Stars.pdf
+244279814,not_planet,external_literature,Published TESS eclipsing quadruple system containing two EBs | https://academic.oup.com/mnras/article/527/2/3995/7284401
+7720507,not_planet,external_literature,Published TESS eclipsing-binary study | https://doi.org/10.1088/1742-6596/2381/1/012106

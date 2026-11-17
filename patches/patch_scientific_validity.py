@@ -14,8 +14,7 @@ logger = logging.getLogger(__name__)
 # Stage 2 supplies the physical transit gate. The model can confirm a moderate
 # physics signal, but cannot create a transit when TLS/harmonics reject it.
 MIN_TRANSIT_TLS_SDE = 3.0
-MIN_ML_SUPPORT_SCORE = 0.60
-PHYSICS_OVERRIDE_SCORE = 0.70
+MIN_ML_SUPPORT_SCORE = 0.50
 
 def _as_float(row: pd.Series, name: str, default: float = np.nan) -> float:
     try:
@@ -77,20 +76,20 @@ def _score_row(row: pd.Series) -> pd.Series:
         "HARMONIC_REVIEW_REQUIRED" if not harmonic_ok else
         "TLS_SDE_TOO_LOW_OR_UNAVAILABLE"
     )
-    physics_override = bool(physics_detector_pass and physics >= PHYSICS_OVERRIDE_SCORE)
-    # ML only decides whether an already physics-admitted event is planetary;
-    # it cannot promote a BLS/TLS or harmonic failure to TRANSIT.
+    # The transit search/harmonic checks admit candidates. Physics proxy scores
+    # alone do not prove the source is a planet (blends can pass every available
+    # light-curve check), so the classifier must also support a TRANSIT label.
     ml_supported_transit = bool(physics_detector_pass and ml >= MIN_ML_SUPPORT_SCORE)
-    screening_flag = bool(physics_override or ml_supported_transit)
+    screening_flag = ml_supported_transit
     sec = _as_float(row, "nosec_score")
     odd_even = _as_float(row, "oddeven_score")
     ellipsoidal = _as_float(row, "ellipsoidal_score")
     eb_evidence = any(np.isfinite(x) and x <= 0.25 for x in (sec, odd_even, ellipsoidal))
 
-    if physics_override or ml_supported_transit:
+    if ml_supported_transit:
         label = "TRANSIT"
         confidence = score
-        classification_basis = "physics_override" if physics_override else "physics_plus_ml"
+        classification_basis = "physics_gate_plus_ml"
     elif eb_evidence and ml < 0.60:
         label = "ECLIPSING_BINARY"
         confidence = 1.0 - score
@@ -271,6 +270,6 @@ def apply() -> None:
     logger.info("Scientific validity patch active: measured physics only; archive is annotation-only")
     print(
         "  Patched detector: TLS SDE >= 3 (or BLS SDE >= 10 when TLS is missing) + harmonic pass; "
-        "physics >= 0.70 can override ML, otherwise ML >= 0.60 supports a gated transit; "
+        "ML >= 0.50 classifies an already physics-gated candidate as TRANSIT; "
         "archive labels cannot force TRANSIT"
     )
